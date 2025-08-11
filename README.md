@@ -419,9 +419,9 @@ elegant-notepad/
 
 ## 📞 联系我们
 
-- **GitHub Issues**: [项目问题追踪](https://github.com/your-username/elegant-notepad/issues)
-- **讨论区**: [GitHub Discussions](https://github.com/your-username/elegant-notepad/discussions)
-- **邮箱**: your-email@example.com
+- **GitHub Issues**: [项目问题追踪](https://github.com/4isblog/Elegant-Notepad/issues)
+- **讨论区**: [GitHub Discussions](https://github.com/4isblog/Elegant-Notepad/discussions)
+- **邮箱**: service@4is.cc
 
 ---
 
