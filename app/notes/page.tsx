@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { motion } from "framer-motion"
 import { 
   Plus, 
@@ -24,6 +25,7 @@ import { Header } from "@/components/Header"
 import { CreateNoteModal } from "@/components/CreateNoteModal"
 import { LoginModal } from "@/components/LoginModal"
 import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog"
+import { Yiyan } from "@/components/Yiyan"
 import { useAuth } from "@/components/AuthProvider"
 import { Note } from "@/types"
 import { 
@@ -34,10 +36,10 @@ import {
   getShareUrl
 } from "@/lib/utils"
 import toast from "react-hot-toast"
-import Cookies from 'js-cookie'
 
 export default function NotesPage() {
   const { user, isLoading: authLoading } = useAuth()
+  const router = useRouter()
   const [notes, setNotes] = React.useState<Note[]>([])
   const [isLoading, setIsLoading] = React.useState(true)
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -64,11 +66,8 @@ export default function NotesPage() {
     try {
       setIsLoading(true)
       
-      const token = Cookies.get('auth-token')
       const response = await fetch('/api/notes', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include'
       })
       
       const data = await response.json()
@@ -100,12 +99,9 @@ export default function NotesPage() {
 
     try {
       setIsDeleting(true)
-      const token = Cookies.get('auth-token')
       const response = await fetch(`/api/notes/${deleteNoteId}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include'
       })
 
       const result = await response.json()
@@ -140,10 +136,14 @@ export default function NotesPage() {
   }
 
   // Filter notes based on search query
-  const filteredNotes = notes.filter(note =>
-    note.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    note.content.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const filteredNotes = notes.filter(note => {
+    const title = note.title || ''
+    const content = note.content || ''
+    const query = searchQuery.toLowerCase()
+    
+    return title.toLowerCase().includes(query) ||
+           content.toLowerCase().includes(query)
+  })
 
   // Show login prompt if not authenticated
   if (!authLoading && !user) {
@@ -187,12 +187,8 @@ export default function NotesPage() {
         </div>
 
         <LoginModal
-          open={showLoginModal}
-          onOpenChange={setShowLoginModal}
-          onSuccess={() => {
-            setShowLoginModal(false)
-            loadNotes()
-          }}
+          isOpen={showLoginModal}
+          onClose={() => setShowLoginModal(false)}
         />
       </>
     )
@@ -226,6 +222,15 @@ export default function NotesPage() {
                 <Plus className="h-5 w-5 mr-2" />
                 创建笔记
               </Button>
+            </motion.div>
+
+            {/* 一言励志语 */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+            >
+              <Yiyan />
             </motion.div>
 
             {/* Search */}
@@ -366,15 +371,35 @@ export default function NotesPage() {
       {/* Footer */}
       <footer className="border-t bg-background/50 backdrop-blur">
         <div className="container mx-auto px-4 py-8">
-          <div className="text-center text-sm text-muted-foreground">
+          <div className="text-center text-sm text-muted-foreground space-y-2">
             <p>© 2025 优雅记事本. Made with ❤️ for secure and elegant note-taking.</p>
+            <div className="flex justify-center gap-6">
+              <Link href="/privacy" className="hover:text-primary transition-colors">
+                隐私策略
+              </Link>
+              <Link href="/terms" className="hover:text-primary transition-colors">
+                服务条款
+              </Link>
+              <Link href="/about" className="hover:text-primary transition-colors">
+                关于我们
+              </Link>
+            </div>
           </div>
         </div>
       </footer>
 
       <CreateNoteModal
-        open={showCreateModal}
-        onOpenChange={setShowCreateModal}
+        isOpen={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSuccess={(noteId) => {
+          setShowCreateModal(false)
+          // 跳转到笔记编辑页面
+          if (noteId) {
+            router.push(`/note/${noteId}`)
+          } else {
+            loadNotes()
+          }
+        }}
       />
       <DeleteConfirmDialog
         open={showDeleteDialog}

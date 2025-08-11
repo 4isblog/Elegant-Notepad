@@ -14,6 +14,7 @@ export interface CreateNoteRequest {
   title: string
   content: string
   password?: string
+  customShortUrl?: string  // 新增：自定义短链后缀
 }
 
 export interface UpdateNoteRequest {
@@ -34,6 +35,7 @@ export interface ShareableNote {
   content: string
   shortUrl: string
   createdAt: string
+  updatedAt: string  // 添加更新时间字段
   isPasswordProtected: boolean
 }
 
@@ -61,9 +63,11 @@ export interface ToastOptions {
 export interface User {
   id: string
   username: string
+  email: string
   passwordHash: string
   createdAt: string
   updatedAt: string
+  noContentAudit?: boolean  // 免审核权限标识
 }
 
 export interface LoginRequest {
@@ -81,6 +85,10 @@ export interface AuthResponse {
   user?: {
     id: string
     username: string
+    email: string
+    createdAt: string
+    updatedAt: string
+    noContentAudit?: boolean
   }
   token?: string
   error?: string
@@ -89,8 +97,7 @@ export interface AuthResponse {
 export interface AuthContextType {
   user: User | null
   isLoading: boolean
-  login: (username: string, password: string) => Promise<boolean>
-  register: (username: string, password: string) => Promise<boolean>
-  logout: () => void
-  checkAuth: () => Promise<void>
+  login: (username: string, password: string, captchaToken?: string) => Promise<boolean>
+  register: (username: string, password: string, email: string, emailCode: string, captchaToken?: string) => Promise<boolean>
+  logout: () => Promise<void>
 }

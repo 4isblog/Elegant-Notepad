@@ -1,71 +1,106 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getRedisInstance } from '@/lib/redis'
 import { comparePassword, generateToken } from '@/lib/auth'
-import { LoginRequest, AuthResponse } from '@/types'
-
-// 强制动态渲染
-export const dynamic = 'force-dynamic'
 
 export async function POST(request: NextRequest) {
   try {
-    const body: LoginRequest = await request.json()
-    const { username, password } = body
+    const body = await request.json()
+    const { username, password, captchaToken } = body
 
-    // 验证输入
     if (!username || !password) {
-      return NextResponse.json<AuthResponse>({
-        success: false,
-        error: '用户名和密码不能为空'
-      }, { status: 400 })
+      return NextResponse.json(
+        { error: '用户名/邮箱和密码不能为空' },
+        { status: 400 }
+      )
+    }
+
+    if (!captchaToken) {
+      return NextResponse.json(
+        { error: '请完成验证码验证' },
+        { status: 400 }
+      )
+    }
+
+    // 验证验证码格式（只接受图形验证码）
+    if (!captchaToken.startsWith('image-captcha-')) {
+      return NextResponse.json(
+        { error: '验证码格式无效' },
+        { status: 400 }
+      )
     }
 
     const redis = getRedisInstance()
 
-    // 通过用户名查找用户ID
-    const userId = await redis.get(`user:username:${username}`)
+    // 判断输入的是邮箱还是用户名
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)
+    let userId
+    
+    if (isEmail) {
+      // 通过邮箱查找用户ID
+      userId = await redis.get(`user:email:${username}`)
+    } else {
+      // 通过用户名查找用户ID
+      userId = await redis.get(`user:username:${username}`)
+    }
+    
     if (!userId || typeof userId !== 'string') {
-      return NextResponse.json<AuthResponse>({
-        success: false,
-        error: '用户名或密码错误'
-      }, { status: 401 })
+      return NextResponse.json(
+        { error: '用户名/邮箱或密码错误' },
+        { status: 401 }
+      )
     }
 
     // 获取用户信息
     const userData = await redis.get(`user:${userId}`)
     if (!userData) {
-      return NextResponse.json<AuthResponse>({
-        success: false,
-        error: '用户不存在'
-      }, { status: 401 })
+      return NextResponse.json(
+        { error: '用户名/邮箱或密码错误' },
+        { status: 401 }
+      )
     }
 
     const user = typeof userData === 'string' ? JSON.parse(userData) : userData
 
     // 验证密码
     if (!comparePassword(password, user.passwordHash)) {
-      return NextResponse.json<AuthResponse>({
-        success: false,
-        error: '用户名或密码错误'
-      }, { status: 401 })
+      return NextResponse.json(
+        { error: '用户名/邮箱或密码错误' },
+        { status: 401 }
+      )
     }
 
-    // 生成JWT令牌
-    const token = generateToken({ userId: user.id, username: user.username })
+    // 生成 JWT token
+    const token = generateToken({ 
+      userId: user.id, 
+      username: user.username 
+    })
 
-    return NextResponse.json<AuthResponse>({
+    // 设置 cookie
+    const response = NextResponse.json({
       success: true,
       user: {
         id: user.id,
-        username: user.username
-      },
-      token
+        username: user.username,
+        email: user.email,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+        noContentAudit: user.noContentAudit || false
+      }
     })
 
+    response.cookies.set('auth-token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+    })
+
+    return response
   } catch (error) {
     console.error('Login error:', error)
-    return NextResponse.json<AuthResponse>({
-      success: false,
-      error: '登录失败，请重试'
-    }, { status: 500 })
+    return NextResponse.json(
+      { error: '登录失败' },
+      { status: 500 }
+    )
   }
 } 

@@ -30,11 +30,15 @@ export function comparePassword(password: string, hash: string): boolean {
 }
 
 export function getTokenFromRequest(request: NextRequest): string | null {
+  // 首先尝试从Authorization头部获取token
   const authHeader = request.headers.get('authorization')
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return null
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.substring(7)
   }
-  return authHeader.substring(7)
+  
+  // 如果没有Authorization头部，尝试从cookie获取token
+  const token = request.cookies.get('auth-token')?.value
+  return token || null
 }
 
 export function getUserFromRequest(request: NextRequest): JWTPayload | null {

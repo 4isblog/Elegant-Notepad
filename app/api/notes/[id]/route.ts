@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getNote, saveNote, deleteNote, getRedisInstance } from '@/lib/redis'
 import { getUserFromRequest } from '@/lib/auth'
-import { sanitizeTitle, sanitizeContent, hashPassword } from '@/lib/utils'
+import { sanitizeTitle, sanitizeContent, hashPassword, validateContentFilter } from '@/lib/utils'
 import { Note, UpdateNoteRequest, ApiResponse } from '@/types'
 
 // 强制动态渲染
@@ -39,7 +39,9 @@ export async function GET(
       if (userPayload && userPayload.userId === note.userId) {
         // Don't return password hash
         const responseNote = { ...note }
+        const hasPassword = !!(note.passwordHash || (note as any).password)
         delete responseNote.passwordHash
+        responseNote.isPasswordProtected = hasPassword
 
         return NextResponse.json({
           success: true,
@@ -51,7 +53,9 @@ export async function GET(
       // 如果不是所有者，检查是否允许匿名访问
       // 对于分享链接，允许访问但可能需要密码验证
       const responseNote = { ...note }
+              const hasPassword = !!(note.passwordHash || (note as any).password)
       delete responseNote.passwordHash
+      responseNote.isPasswordProtected = hasPassword
 
       return NextResponse.json({
         success: true,
@@ -120,11 +124,58 @@ export async function PUT(
       )
     }
 
+    // 准备更新的标题和内容
+    const newTitle = body.title ? body.title : existingNote.title
+    const newContent = body.content !== undefined ? body.content : existingNote.content
+
+    // 获取用户的免审核权限状态
+    const redis = getRedisInstance()
+    let noContentAudit = false
+    const userDataRaw = await redis.get(`user:${userPayload.userId}`)
+    if (userDataRaw) {
+      let userData
+      if (typeof userDataRaw === 'object') {
+        // 如果Redis返回的已经是对象，直接使用
+        userData = userDataRaw
+      } else if (typeof userDataRaw === 'string') {
+        // 如果是字符串，尝试JSON解析
+        try {
+          userData = JSON.parse(userDataRaw)
+        } catch (parseError) {
+          console.error('解析用户数据失败:', parseError)
+          userData = null
+        }
+      }
+      
+      if (userData) {
+        noContentAudit = userData.noContentAudit || false
+      }
+    }
+
+    console.log(`用户 ${userPayload.userId} 的免审核状态:`, noContentAudit)
+
+    // 违禁词检测 - 只检测内容，不检测标题（免审核用户跳过）
+    if (!noContentAudit) {
+      const contentFilterResult = await validateContentFilter('', newContent)
+      if (!contentFilterResult.isValid) {
+        return NextResponse.json(
+          { 
+            success: false, 
+            error: contentFilterResult.error,
+            bannedWords: contentFilterResult.bannedWords
+          },
+          { status: 400 }
+        )
+      }
+    } else {
+      console.log('用户已开启免审核，跳过内容检测')
+    }
+
     // Update note
     const updatedNote: Note = {
       ...existingNote,
-      title: body.title ? sanitizeTitle(body.title) : existingNote.title,
-      content: body.content !== undefined ? sanitizeContent(body.content) : existingNote.content,
+      title: sanitizeTitle(newTitle),
+      content: sanitizeContent(newContent),
       updatedAt: new Date().toISOString(),
     }
 

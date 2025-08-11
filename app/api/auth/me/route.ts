@@ -1,48 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { verifyToken } from '@/lib/auth'
 import { getRedisInstance } from '@/lib/redis'
-import { getUserFromRequest } from '@/lib/auth'
-import { User, AuthResponse } from '@/types'
-
-// 强制动态渲染
-export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
   try {
-    // 验证JWT令牌
-    const userPayload = getUserFromRequest(request)
-    if (!userPayload) {
-      return NextResponse.json<AuthResponse>({
-        success: false,
-        error: '未授权访问'
-      }, { status: 401 })
+    // 从 cookie 中获取 token
+    const token = request.cookies.get('auth-token')?.value
+
+    if (!token) {
+      return NextResponse.json(
+        { error: '未登录' },
+        { status: 401 }
+      )
+    }
+
+    // 验证 token
+    const payload = verifyToken(token)
+    if (!payload) {
+      return NextResponse.json(
+        { error: 'Token 无效' },
+        { status: 401 }
+      )
     }
 
     const redis = getRedisInstance()
-
+    
     // 获取用户信息
-    const userData = await redis.get(`user:${userPayload.userId}`)
+    const userData = await redis.get(`user:${payload.userId}`)
     if (!userData) {
-      return NextResponse.json<AuthResponse>({
-        success: false,
-        error: '用户不存在'
-      }, { status: 404 })
+      return NextResponse.json(
+        { error: '用户不存在' },
+        { status: 401 }
+      )
     }
 
-    const user: User = typeof userData === 'string' ? JSON.parse(userData) : userData
+    const user = typeof userData === 'string' ? JSON.parse(userData) : userData
 
-    return NextResponse.json<AuthResponse>({
+    return NextResponse.json({
       success: true,
       user: {
         id: user.id,
-        username: user.username
+        username: user.username,
+        email: user.email,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+        noContentAudit: user.noContentAudit || false
       }
     })
 
   } catch (error) {
-    console.error('Get user error:', error)
-    return NextResponse.json<AuthResponse>({
-      success: false,
-      error: '获取用户信息失败'
-    }, { status: 500 })
+    console.error('Get user info error:', error)
+    return NextResponse.json(
+      { error: '获取用户信息失败' },
+      { status: 500 }
+    )
   }
 } 

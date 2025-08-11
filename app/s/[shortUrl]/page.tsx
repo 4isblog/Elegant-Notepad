@@ -17,6 +17,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Loading } from "@/components/ui/loading"
 import { Header } from "@/components/Header"
 import { PasswordModal } from "@/components/PasswordModal"
+import { LoginModal } from "@/components/LoginModal"
+import { useAuth } from "@/components/AuthProvider"
 import { Note } from "@/types"
 import { 
   formatDate, 
@@ -33,10 +35,13 @@ interface SharePageProps {
 
 export default function SharePage({ params }: SharePageProps) {
   const router = useRouter()
+  const { user, isLoading: authLoading } = useAuth()
   const [note, setNote] = React.useState<Note | null>(null)
   const [isLoading, setIsLoading] = React.useState(true)
   const [showPassword, setShowPassword] = React.useState(false)
+  const [showLoginModal, setShowLoginModal] = React.useState(false)
   const [hasAccess, setHasAccess] = React.useState(false)
+  const [isOwner, setIsOwner] = React.useState(false)
   
   // 内容统计状态
   const [totalLines, setTotalLines] = React.useState(0)
@@ -50,25 +55,48 @@ export default function SharePage({ params }: SharePageProps) {
     setTotalCharacters(characters)
   }
 
-  // Load note data
-  React.useEffect(() => {
-    loadNote()
-  }, [params.shortUrl])
-
-  const loadNote = async () => {
+  const loadNote = React.useCallback(async () => {
     try {
       setIsLoading(true)
+      // 重置所有状态
+      setShowPassword(false)
+      setHasAccess(false)
+      setIsOwner(false)
+      
       const response = await fetch(`/api/short/${params.shortUrl}`)
       const result = await response.json()
 
       if (result.success && result.note) {
         setNote(result.note)
         
+        // 如果用户已登录，尝试获取完整笔记信息来检查所有权
+        if (user && result.note.id) {
+          try {
+            const noteResponse = await fetch(`/api/notes/${result.note.id}`)
+            const noteResult = await noteResponse.json()
+            
+            if (noteResult.success && noteResult.isOwner) {
+              // 用户是笔记所有者，直接显示内容，不需要密码验证
+              setNote(noteResult.data)
+              setIsOwner(true)
+              setHasAccess(true)
+              setShowPassword(false) // 确保不显示密码窗口
+              calculateStats(noteResult.data.content || '')
+              return
+            }
+          } catch (error) {
+
+          }
+        }
+        
+        // 非所有者或未登录用户的正常流程
+        setIsOwner(false) // 确保重置所有者状态
         if (result.note.isPasswordProtected) {
           setHasAccess(false)
           setShowPassword(true)
         } else {
           setHasAccess(true)
+          setShowPassword(false)
           // 计算内容统计
           calculateStats(result.note.content || '')
         }
@@ -82,55 +110,74 @@ export default function SharePage({ params }: SharePageProps) {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [params.shortUrl, user, authLoading])
 
-  const handlePasswordVerify = async (password: string) => {
-    if (!note) return false
+  // Load note data
+  React.useEffect(() => {
+    if (!authLoading) { // 确保认证状态已初始化
+      loadNote()
+    }
+  }, [authLoading, loadNote])
+
+  // 监听用户登录状态变化，登录成功后关闭登录模态框
+  React.useEffect(() => {
+    if (user && showLoginModal) {
+      setShowLoginModal(false)
+      // 用户刚登录，会触发上面的 useEffect 重新加载笔记
+    }
+  }, [user, showLoginModal])
+
+  const handlePasswordVerify = async (password: string, captchaToken?: string) => {
+    if (!note) {
+      throw new Error('笔记不存在')
+    }
 
     try {
       const response = await fetch(`/api/notes/${note.id}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ password, captchaToken })
       })
 
       const result = await response.json()
       
-      if (result.success) {
+      if (response.ok && result.success) {
         setHasAccess(true)
-        setShowPassword(false)
+        setShowPassword(false) // 关闭密码模态框
         
         // 密码验证成功后，重新获取完整笔记内容
         try {
           const fullNoteResponse = await fetch(`/api/notes/${note.id}`)
           const fullNoteResult = await fullNoteResponse.json()
           
-          console.log('获取完整笔记内容响应:', fullNoteResult)
+
           
           if (fullNoteResult.success && fullNoteResult.data) {
             setNote(fullNoteResult.data)
             setHasAccess(true)
-            setShowPassword(false)
             // 计算内容统计
             calculateStats(fullNoteResult.data.content || '')
             toast.success('密码验证成功')
           } else {
-            console.error('获取笔记内容失败:', fullNoteResult)
-            toast.error('获取笔记内容失败')
+
+            throw new Error('获取笔记内容失败')
           }
         } catch (error) {
-          console.error('获取完整笔记内容失败:', error)
-          toast.error('获取笔记内容失败')
+
+          throw new Error('获取笔记内容失败')
         }
-        
-        return true
       } else {
-        toast.error('密码错误')
-        return false
+        // 处理HTTP错误或API返回的错误
+        throw new Error(result.error || '密码错误，请重试')
       }
-    } catch (error) {
-      toast.error('验证失败，请重试')
-      return false
+    } catch (error: any) {
+      
+      // 如果是我们已经处理过的错误，直接抛出
+      if (error.message && (error.message.includes('密码错误') || error.message.includes('验证失败'))) {
+        throw error
+      }
+      // 处理网络错误或其他未预期的错误
+      throw new Error('验证失败，请检查网络连接后重试')
     }
   }
 
@@ -232,11 +279,24 @@ export default function SharePage({ params }: SharePageProps) {
               className="space-y-6"
             >
               {/* Share Info Banner */}
-              <Card className="border-primary/20 bg-primary/5">
+              <Card className={`${isOwner ? 'border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20' : 'border-primary/20 bg-primary/5'}`}>
                 <CardHeader className="pb-3">
-                  <div className="flex items-center gap-2 text-primary">
-                    <Share2 className="h-4 w-4" />
-                    <span className="text-sm font-medium">通过分享链接访问</span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-primary">
+                      <Share2 className="h-4 w-4" />
+                      <span className="text-sm font-medium">
+                        {isOwner ? '您是此笔记的所有者' : '通过分享链接访问'}
+                      </span>
+                    </div>
+                    {isOwner && (
+                      <Button
+                        size="sm"
+                        onClick={() => router.push(`/note/${note?.id}`)}
+                        className="gap-2"
+                      >
+                        编辑笔记
+                      </Button>
+                    )}
                   </div>
                 </CardHeader>
               </Card>
@@ -308,10 +368,22 @@ export default function SharePage({ params }: SharePageProps) {
             <div className="text-center py-16">
               <Lock className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
               <h2 className="text-2xl font-bold mb-2">此笔记受密码保护</h2>
-              <p className="text-muted-foreground mb-6">请输入密码以查看内容</p>
-              <Button onClick={() => setShowPassword(true)}>
-                输入密码
-              </Button>
+              <p className="text-muted-foreground mb-6">
+                {user ? 
+                  '请输入密码以查看内容' : 
+                  '如果您是此笔记的所有者，请先登录您的账户。否则请输入密码以查看内容。'
+                }
+              </p>
+              <div className="flex gap-2 justify-center">
+                <Button onClick={() => setShowPassword(true)}>
+                  输入密码
+                </Button>
+                {!user && (
+                  <Button variant="outline" onClick={() => setShowLoginModal(true)}>
+                    登录账户
+                  </Button>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -320,18 +392,48 @@ export default function SharePage({ params }: SharePageProps) {
       {/* Footer */}
       <footer className="border-t bg-background/50 backdrop-blur">
         <div className="container mx-auto px-4 py-8">
-          <div className="text-center text-sm text-muted-foreground">
+          <div className="text-center text-sm text-muted-foreground space-y-2">
             <p>© 2025 优雅记事本. Made with ❤️ for secure and elegant note-taking.</p>
+            <div className="flex justify-center gap-6">
+              <Button
+                variant="link"
+                size="sm"
+                onClick={() => router.push('/privacy')}
+                className="h-auto p-0 text-xs text-muted-foreground hover:text-primary"
+              >
+                隐私策略
+              </Button>
+              <Button
+                variant="link"
+                size="sm"
+                onClick={() => router.push('/terms')}
+                className="h-auto p-0 text-xs text-muted-foreground hover:text-primary"
+              >
+                服务条款
+              </Button>
+              <Button
+                variant="link"
+                size="sm"
+                onClick={() => router.push('/about')}
+                className="h-auto p-0 text-xs text-muted-foreground hover:text-primary"
+              >
+                关于我们
+              </Button>
+            </div>
           </div>
         </div>
       </footer>
 
       <PasswordModal
-        open={showPassword}
+        open={showPassword && !isOwner && !hasAccess}
         onOpenChange={setShowPassword}
         onVerify={handlePasswordVerify}
-        title="输入密码"
-        description="此笔记受密码保护，请输入正确的密码以查看内容"
+        noteTitle={note?.title}
+      />
+
+      <LoginModal 
+        isOpen={showLoginModal} 
+        onClose={() => setShowLoginModal(false)}
       />
     </div>
   )

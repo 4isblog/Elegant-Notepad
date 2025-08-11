@@ -21,6 +21,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { PasswordInput } from "@/components/ui/password-input"
 import { MarkdownEditor } from "@/components/ui/markdown-editor"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Loading } from "@/components/ui/loading"
@@ -35,7 +36,8 @@ import {
   copyToClipboard, 
   getShareUrl,
   validateTitle,
-  validateContent
+  validateContent,
+  checkBannedWords
 } from "@/lib/utils"
 import toast from "react-hot-toast"
 import Cookies from "js-cookie"
@@ -149,11 +151,8 @@ export default function NotePage({ params }: NotePageProps) {
   const loadNote = async () => {
     try {
       setIsLoading(true)
-      const token = Cookies.get('auth-token')
       const response = await fetch(`/api/notes/${params.id}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include'
       })
       const result = await response.json()
 
@@ -197,19 +196,17 @@ export default function NotePage({ params }: NotePageProps) {
     }
   }
 
-  const handlePasswordVerify = async (password: string) => {
+  const handlePasswordVerify = async (password: string, captchaToken: string) => {
     try {
-      console.log('开始验证密码:', password) // 调试日志
       const response = await fetch(`/api/notes/${params.id}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ password, captchaToken })
       })
 
       const result = await response.json()
-      console.log('密码验证响应:', result) // 调试日志
       
-      if (result.success) {
+      if (response.ok && result.success) {
         setHasAccess(true)
         setShowPassword(false)
         setEditData({
@@ -219,16 +216,13 @@ export default function NotePage({ params }: NotePageProps) {
         loadContentLines(note!.content, LINES_PER_LOAD) // 加载内容
         toast.success('密码验证成功')
       } else {
-        toast.error(result.error || '密码错误')
-        return false
+        throw new Error(result.error || '密码错误')
       }
-    } catch (error) {
-      console.error('密码验证错误:', error) // 调试日志
-      toast.error('验证失败，请重试')
-      return false
+    } catch (error: any) {
+      console.error('密码验证错误:', error)
+      toast.error(error.message || '验证失败，请重试')
+      throw error
     }
-    
-    return true
   }
 
   // 设置笔记密码
@@ -250,13 +244,12 @@ export default function NotePage({ params }: NotePageProps) {
 
     try {
       setIsSettingPassword(true)
-      const token = Cookies.get('auth-token')
       const response = await fetch(`/api/notes/${params.id}/password`, {
         method: 'PUT',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
+        credentials: 'include',
         body: JSON.stringify({
           password: passwordData.password
         })
@@ -282,12 +275,9 @@ export default function NotePage({ params }: NotePageProps) {
   // 移除笔记密码
   const handleRemovePassword = async () => {
     try {
-      const token = Cookies.get('auth-token')
       const response = await fetch(`/api/notes/${params.id}/password`, {
         method: 'DELETE',
-        headers: { 
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include'
       })
 
       const result = await response.json()
@@ -308,7 +298,11 @@ export default function NotePage({ params }: NotePageProps) {
     if (!note) return
     
     try {
-      const shareUrl = `${window.location.origin}/note/${note.id}`
+      // 使用短链接进行分享，如果没有短链接则使用笔记ID
+      const shareUrl = note.shortUrl 
+        ? getShareUrl(note.shortUrl)
+        : `${window.location.origin}/note/${note.id}`
+      
       await navigator.clipboard.writeText(shareUrl)
       toast.success('分享链接已复制到剪贴板')
     } catch (error) {
@@ -319,14 +313,7 @@ export default function NotePage({ params }: NotePageProps) {
   // 下载笔记
   const handleDownload = () => {
     if (!note) return
-    
-    const element = document.createElement('a')
-    const file = new Blob([note.content], { type: 'text/markdown' })
-    element.href = URL.createObjectURL(file)
-    element.download = `${note.title}.md`
-    document.body.appendChild(element)
-    element.click()
-    document.body.removeChild(element)
+    downloadMarkdown(note.title, note.content)
     toast.success('笔记已下载')
   }
 
@@ -343,6 +330,18 @@ export default function NotePage({ params }: NotePageProps) {
     if (!contentValidation.isValid) {
       newErrors.content = contentValidation.error!
     }
+
+    // 违禁词检测 - 只检测内容，不检测标题
+    const contentFilterResult = await checkBannedWords(editData.content)
+    
+    if (!contentFilterResult.isValid) {
+      // 只显示弹窗提示，不设置错误状态
+      toast.error(
+        `内容检测到违禁内容：${contentFilterResult.bannedWords.join(', ')}\n请修改后重试`,
+        { duration: 5000 }
+      )
+      return // 直接返回，不继续保存
+    }
     
     setErrors(newErrors)
     if (Object.keys(newErrors).length > 0) {
@@ -351,13 +350,12 @@ export default function NotePage({ params }: NotePageProps) {
 
     try {
       setIsSaving(true)
-      const token = Cookies.get('auth-token')
       const response = await fetch(`/api/notes/${params.id}`, {
         method: 'PUT',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
+        credentials: 'include',
         body: JSON.stringify({
           title: editData.title,
           content: editData.content
@@ -373,7 +371,15 @@ export default function NotePage({ params }: NotePageProps) {
         loadContentLines(result.data.content, LINES_PER_LOAD)
         toast.success('保存成功')
       } else {
-        toast.error(result.error || '保存失败')
+        // 处理违禁词错误
+        if (result.bannedWords && result.bannedWords.length > 0) {
+          toast.error(
+            `检测到违禁内容：${result.bannedWords.join(', ')}\n请修改后重试`,
+            { duration: 5000 }
+          )
+        } else {
+          toast.error(result.error || '保存失败')
+        }
       }
     } catch (error) {
       toast.error('保存失败，请重试')
@@ -389,12 +395,9 @@ export default function NotePage({ params }: NotePageProps) {
   const confirmDelete = async () => {
     try {
       setIsDeleting(true)
-      const token = Cookies.get('auth-token')
       const response = await fetch(`/api/notes/${params.id}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include'
       })
 
       const result = await response.json()
@@ -577,12 +580,10 @@ export default function NotePage({ params }: NotePageProps) {
                         <Input
                           value={editData.title}
                           onChange={(e) => setEditData({ ...editData, title: e.target.value })}
-                          className={errors.title ? 'border-destructive' : ''}
+                          className=""
                           placeholder="输入标题..."
                         />
-                        {errors.title && (
-                          <p className="text-sm text-destructive">{errors.title}</p>
-                        )}
+
                       </div>
                       
                       <div className="space-y-2">
@@ -594,9 +595,7 @@ export default function NotePage({ params }: NotePageProps) {
                           placeholder="开始写作..."
                           height={400}
                         />
-                        {errors.content && (
-                          <p className="text-sm text-destructive">{errors.content}</p>
-                        )}
+
                         <p className="text-xs text-muted-foreground">
                           {editData.content.length} / 51200 字符
                         </p>
@@ -706,8 +705,7 @@ export default function NotePage({ params }: NotePageProps) {
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium">密码</label>
-              <Input
-                type="password"
+              <PasswordInput
                 placeholder="请输入密码（至少4位）"
                 value={passwordData.password}
                 onChange={(e) => setPasswordData(prev => ({ ...prev, password: e.target.value }))}
@@ -717,8 +715,7 @@ export default function NotePage({ params }: NotePageProps) {
             
             <div>
               <label className="text-sm font-medium">确认密码</label>
-              <Input
-                type="password"
+              <PasswordInput
                 placeholder="请再次输入密码"
                 value={passwordData.confirmPassword}
                 onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
@@ -760,8 +757,7 @@ export default function NotePage({ params }: NotePageProps) {
         open={showPassword}
         onOpenChange={setShowPassword}
         onVerify={handlePasswordVerify}
-        title="输入密码"
-        description="此笔记受密码保护，请输入正确的密码以查看内容"
+        noteTitle={note?.title}
       />
       
       {/* 删除确认对话框 */}

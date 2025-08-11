@@ -108,11 +108,19 @@ export async function getNote(id: string): Promise<Note | null> {
       return null
     }
     
+    let note: any
     if (typeof noteData === 'string') {
-      return JSON.parse(noteData) as Note
+      note = JSON.parse(noteData)
+    } else {
+      note = noteData
     }
     
-    return noteData as Note
+    // 确保 isPasswordProtected 字段存在
+    if (note && typeof note === 'object') {
+      note.isPasswordProtected = !!(note.passwordHash || note.password)
+    }
+    
+    return note as Note
   } catch (error) {
     console.error('从 Redis 获取笔记失败:', error)
     return null
@@ -256,5 +264,18 @@ export async function getRedisInfo(): Promise<any> {
       error: error instanceof Error ? error.message : 'Unknown error',
       timestamp: new Date().toISOString()
     }
+  }
+}
+
+// Check if short URL already exists
+export async function shortUrlExists(shortUrl: string): Promise<boolean> {
+  const redis = getRedisInstance()
+  
+  try {
+    const exists = await redis.exists(`short:${shortUrl}`)
+    return exists === 1
+  } catch (error) {
+    console.error('检查短链后缀是否存在失败:', error)
+    return false
   }
 }

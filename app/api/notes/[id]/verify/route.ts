@@ -1,111 +1,82 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ApiResponse, NoteAccess } from '@/types'
-import { getNote, deleteNote } from '@/lib/redis'
-import { verifyPassword } from '@/lib/utils'
+import { getRedisInstance } from '@/lib/redis'
+import { comparePassword } from '@/lib/auth'
 
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
-): Promise<NextResponse<ApiResponse<NoteAccess>>> {
+) {
   try {
-    const noteId = params.id
-    const { password } = await request.json()
-    
-    if (!noteId) {
+    const body = await request.json()
+    const { password, captchaToken } = body
+
+    if (!password) {
       return NextResponse.json(
-        { success: false, error: '笔记 ID 是必需的' },
+        { error: '密码不能为空' },
         { status: 400 }
       )
     }
 
-    const note = await getNote(noteId)
-    
-    if (!note) {
+    if (!captchaToken) {
       return NextResponse.json(
-        { success: false, error: '笔记未找到' },
+        { error: '请完成验证码验证' },
+        { status: 400 }
+      )
+    }
+
+    // 验证验证码格式（只接受图形验证码）
+    if (!captchaToken.startsWith('image-captcha-')) {
+      return NextResponse.json(
+        { error: '验证码格式无效' },
+        { status: 400 }
+      )
+    }
+
+    const redis = getRedisInstance()
+    const noteData = await redis.get(`note:${params.id}`)
+
+    if (!noteData) {
+      return NextResponse.json(
+        { error: '笔记不存在' },
         { status: 404 }
       )
     }
 
+    const note = typeof noteData === 'string' ? JSON.parse(noteData) : noteData
 
-
-    // Check if note is password protected
-    if (!note.isPasswordProtected) {
-      return NextResponse.json({
-        success: true,
-        data: {
-          noteId,
-          hasAccess: true,
-          isPasswordProtected: false
-        },
-        message: '笔记没有密码保护'
-      })
-    }
-
-    // Verify password
-    if (!password) {
-      return NextResponse.json({
-        success: true,
-        data: {
-          noteId,
-          hasAccess: false,
-          isPasswordProtected: true
-        },
-        message: '需要密码'
-      })
-    }
-
-    if (!note.passwordHash) {
-      console.log('笔记密码哈希未找到，笔记数据:', { id: noteId, isPasswordProtected: note.isPasswordProtected, hasPasswordHash: !!note.passwordHash })
+    const notePassword = note.passwordHash || (note as any).password
+    if (!notePassword) {
       return NextResponse.json(
-        { success: false, error: '笔记密码哈希未找到' },
-        { status: 500 }
+        { error: '此笔记没有设置密码' },
+        { status: 400 }
       )
     }
 
-    console.log('开始验证密码:', { noteId, password, hasPasswordHash: !!note.passwordHash })
-    
-    try {
-      const isValidPassword = await verifyPassword(password, note.passwordHash)
-      console.log('密码验证结果:', { isValidPassword, password, passwordHashLength: note.passwordHash.length })
-      
-      if (isValidPassword) {
-        return NextResponse.json({
-          success: true,
-          data: {
-            noteId,
-            hasAccess: true,
-            isPasswordProtected: true
-          },
-          message: '密码验证成功'
-        })
-      } else {
-        return NextResponse.json({
-          success: false,
-          data: {
-            noteId,
-            hasAccess: false,
-            isPasswordProtected: true
-          },
-          error: '密码错误'
-        }, { status: 401 })
-      }
-    } catch (verifyError) {
-      console.error('密码验证过程中出错:', verifyError)
-      return NextResponse.json({
-        success: false,
-        error: '密码验证失败'
-      }, { status: 500 })
+    // 验证密码 - 如果是旧格式的明文密码，直接比较；如果是哈希密码，使用comparePassword
+    let isValidPassword = false
+    if (note.passwordHash) {
+      // 新格式：哈希密码
+      isValidPassword = comparePassword(password, note.passwordHash)
+    } else if ((note as any).password) {
+      // 旧格式：明文密码
+      isValidPassword = password === (note as any).password
+    }
+    if (!isValidPassword) {
+      return NextResponse.json(
+        { error: '密码错误' },
+        { status: 401 }
+      )
     }
 
-  } catch (error: any) {
-    console.error('验证笔记密码出错:', error)
+    return NextResponse.json({
+      success: true,
+      message: '密码验证成功'
+    })
+
+  } catch (error) {
+    console.error('Password verification error:', error)
     return NextResponse.json(
-      { 
-        success: false, 
-        error: '验证密码失败',
-        message: error.message 
-      },
+      { error: '验证失败' },
       { status: 500 }
     )
   }

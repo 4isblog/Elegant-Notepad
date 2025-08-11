@@ -1,125 +1,105 @@
 "use client"
 
-import React, { createContext, useContext, useEffect, useState } from 'react'
-import Cookies from 'js-cookie'
-import { User, AuthContextType } from '@/types'
+import { createContext, useContext, useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { AuthContextType, User } from '@/types'
 import toast from 'react-hot-toast'
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined)
+const AuthContext = createContext<AuthContextType | null>(null)
 
-export function useAuth() {
-  const context = useContext(AuthContext)
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider')
-  }
-  return context
-}
-
-interface AuthProviderProps {
-  children: React.ReactNode
-}
-
-export function AuthProvider({ children }: AuthProviderProps) {
+export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const router = useRouter()
 
+  // 检查用户登录状态
   const checkAuth = async () => {
     try {
-      const token = Cookies.get('auth-token')
-      if (!token) {
-        setIsLoading(false)
-        return
-      }
-
       const response = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include'
       })
-
+      
       if (response.ok) {
         const data = await response.json()
-        if (data.success) {
+        if (data.success && data.user) {
           setUser(data.user)
-        } else {
-          Cookies.remove('auth-token')
         }
-      } else {
-        Cookies.remove('auth-token')
       }
     } catch (error) {
       console.error('Auth check failed:', error)
-      Cookies.remove('auth-token')
     } finally {
       setIsLoading(false)
     }
   }
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  useEffect(() => {
+    checkAuth()
+  }, [])
+
+  const login = async (username: string, password: string, captchaToken?: string) => {
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username, password, captchaToken }),
+        credentials: 'include'
       })
 
       const data = await response.json()
 
-      if (data.success) {
+      if (response.ok && data.success) {
         setUser(data.user)
-        Cookies.set('auth-token', data.token, { expires: 7 }) // 7天过期
-        toast.success('登录成功！')
         return true
       } else {
-        toast.error(data.error || '登录失败')
-        return false
+        throw new Error(data.error || '登录失败')
       }
-    } catch (error) {
-      console.error('Login failed:', error)
-      toast.error('登录失败，请重试')
-      return false
+    } catch (error: any) {
+      console.error('Login error:', error)
+      throw error
     }
   }
 
-  const register = async (username: string, password: string): Promise<boolean> => {
+  const register = async (username: string, password: string, email: string, emailCode: string, captchaToken?: string) => {
     try {
       const response = await fetch('/api/auth/register', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username, password, email, emailCode, captchaToken }),
+        credentials: 'include'
       })
 
       const data = await response.json()
 
-      if (data.success) {
+      if (response.ok && data.success) {
         setUser(data.user)
-        Cookies.set('auth-token', data.token, { expires: 7 })
-        toast.success('注册成功！')
         return true
       } else {
-        toast.error(data.error || '注册失败')
-        return false
+        throw new Error(data.error || '注册失败')
       }
-    } catch (error) {
-      console.error('Register failed:', error)
-      toast.error('注册失败，请重试')
-      return false
+    } catch (error: any) {
+      console.error('Register error:', error)
+      throw error
     }
   }
 
-  const logout = () => {
-    setUser(null)
-    Cookies.remove('auth-token')
-    toast.success('已退出登录')
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include'
+      })
+    } catch (error) {
+      console.error('Logout error:', error)
+    } finally {
+      setUser(null)
+      router.push('/')
+      toast.success('已退出登录')
+    }
   }
-
-  useEffect(() => {
-    checkAuth()
-  }, [])
 
   const value: AuthContextType = {
     user,
@@ -127,7 +107,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     login,
     register,
     logout,
-    checkAuth
   }
 
   return (
@@ -135,4 +114,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       {children}
     </AuthContext.Provider>
   )
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext)
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider')
+  }
+  return context
 } 

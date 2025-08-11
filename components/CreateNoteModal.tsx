@@ -1,272 +1,258 @@
 "use client"
 
-import * as React from "react"
-import { useRouter } from "next/navigation"
-import { motion } from "framer-motion"
-import { Lock, Save, X } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { MarkdownEditor } from "@/components/ui/markdown-editor"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Loading } from "@/components/ui/loading"
-import { LoginModal } from "@/components/LoginModal"
-import { 
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { useAuth } from "@/components/AuthProvider"
-import { validateTitle, validateContent, validatePassword } from "@/lib/utils"
-import toast from "react-hot-toast"
+import { useState, useEffect, useRef } from 'react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
+import { Button } from './ui/button'
+import { Input } from './ui/input'
+import { PasswordInput } from './ui/password-input'
+import { Card } from './ui/card'
+import { useAuth } from './AuthProvider'
+import { CaptchaWidget } from './ui/captcha'
+import { checkBannedWords } from '@/lib/utils'
+import toast from 'react-hot-toast'
 
 interface CreateNoteModalProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  isOpen: boolean
+  onClose: () => void
+  onSuccess: (noteId?: string) => void
 }
 
-export function CreateNoteModal({ open, onOpenChange }: CreateNoteModalProps) {
-  const router = useRouter()
-  const { user, isLoading: authLoading } = useAuth()
-  const [isLoading, setIsLoading] = React.useState(false)
-  const [showLoginModal, setShowLoginModal] = React.useState(false)
-  const [formData, setFormData] = React.useState({
+export function CreateNoteModal({ isOpen, onClose, onSuccess }: CreateNoteModalProps) {
+  const { user } = useAuth()
+  const [isLoading, setIsLoading] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [captchaToken, setCaptchaToken] = useState('')
+  const [captchaValue, setCaptchaValue] = useState('')
+  const captchaRef = useRef<any>(null)
+  
+  const [formData, setFormData] = useState({
     title: '',
-    content: '',
-    password: ''
+    password: '',
+    customShortUrl: ''
   })
-  const [showAdvanced, setShowAdvanced] = React.useState(false)
-  const [errors, setErrors] = React.useState<Record<string, string>>({})
 
-  // 保存表单数据，用于登录后恢复
-  const [savedFormData, setSavedFormData] = React.useState<typeof formData | null>(null)
+  // 内容验证 - CreateNoteModal只创建笔记标题，不需要内容验证
+  const validateContent = async () => {
+    // 创建笔记时不检测违禁词，在编辑内容时再检测
+    return true
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     
-    // 检查用户是否已登录
-    if (!user && !authLoading) {
-      // 保存当前表单数据
-      setSavedFormData(formData)
-      // 显示登录模态框
-      setShowLoginModal(true)
-      return
-    }
-    
-    // Validate form
-    const newErrors: Record<string, string> = {}
-    
-    const titleValidation = validateTitle(formData.title)
-    if (!titleValidation.isValid) {
-      newErrors.title = titleValidation.error!
-    }
-    
-    const contentValidation = validateContent(formData.content)
-    if (!contentValidation.isValid) {
-      newErrors.content = contentValidation.error!
-    }
-    
-    if (formData.password) {
-      const passwordValidation = validatePassword(formData.password)
-      if (!passwordValidation.isValid) {
-        newErrors.password = passwordValidation.error!
-      }
-    }
-    
-    setErrors(newErrors)
-    if (Object.keys(newErrors).length > 0) {
+    if (!formData.title.trim()) {
+      toast.error('请填写标题')
       return
     }
 
+    // 验证验证码
+    if (!captchaValue.trim()) {
+      toast.error('请输入验证码')
+      return
+    }
+
+    const captchaWidget = captchaRef.current
+    if (!captchaWidget) {
+      toast.error('验证码组件未加载')
+      return
+    }
+
+    const isValidCaptcha = captchaWidget.verify?.()
+    if (!isValidCaptcha) {
+      toast.error('验证码错误')
+      setCaptchaValue('')
+      setTimeout(() => {
+        captchaRef.current?.refresh?.()
+      }, 100)
+      return
+    }
+
+    // 验证码验证成功，生成临时token
+    const tempCaptchaToken = `image-captcha-${Date.now()}-${Math.random().toString(36).substring(2)}`
+
+    // 验证违禁词
+    if (!(await validateContent())) {
+      return
+    }
+
+    // 验证自定义短链接
+    if (formData.customShortUrl) {
+      const shortUrlPattern = /^[a-zA-Z0-9_-]+$/
+      if (!shortUrlPattern.test(formData.customShortUrl)) {
+        toast.error('短链接只能包含字母、数字、下划线和连字符')
+        return
+      }
+      if (formData.customShortUrl.length < 3 || formData.customShortUrl.length > 50) {
+        toast.error('短链接长度应在3-50个字符之间')
+        return
+      }
+    }
+
     setIsLoading(true)
-    
+
     try {
       const response = await fetch('/api/notes', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${document.cookie.split('auth-token=')[1]?.split(';')[0] || ''}`
         },
+        credentials: 'include',
         body: JSON.stringify({
           title: formData.title,
-          content: formData.content,
-          password: formData.password || undefined,
+          content: '', // 创建空内容的笔记
+          password: formData.password.trim() || undefined,
+          customShortUrl: formData.customShortUrl.trim() || undefined,
+          captchaToken: tempCaptchaToken
         }),
       })
 
-      const result = await response.json()
-
-      if (result.success) {
-        toast.success('笔记创建成功！')
-        handleClose()
-        router.push(`/note/${result.data.id}`)
-      } else {
-        toast.error(result.error || '创建笔记失败')
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || '创建失败')
       }
-    } catch (error) {
-      console.error('创建笔记出错:', error)
-      toast.error('创建笔记失败，请重试')
+
+      const result = await response.json()
+      toast.success('笔记创建成功')
+      handleClose()
+      onSuccess(result.data?.id)
+    } catch (error: any) {
+      toast.error(error.message || '创建失败')
+      setCaptchaToken('') // 重置验证码
     } finally {
       setIsLoading(false)
     }
   }
 
   const handleClose = () => {
-    setFormData({ title: '', content: '', password: '' })
-    setSavedFormData(null)
+    setFormData({
+      title: '',
+      password: '',
+      customShortUrl: ''
+    })
+    setCaptchaToken('')
+    setCaptchaValue('')
     setShowAdvanced(false)
-    setErrors({})
-    onOpenChange(false)
+    setIsLoading(false)
+    // 刷新验证码
+    if (captchaRef.current) {
+      captchaRef.current.refresh()
+    }
+    onClose()
   }
 
-  const handleLoginSuccess = () => {
-    setShowLoginModal(false)
-    // 恢复之前保存的表单数据
-    if (savedFormData) {
-      setFormData(savedFormData)
-      setSavedFormData(null)
-      // 自动提交表单
-      setTimeout(() => {
-        const form = document.querySelector('form') as HTMLFormElement
-        if (form) {
-          form.requestSubmit()
-        }
-      }, 100)
-    }
+  const handleCaptchaVerify = (token: string) => {
+    setCaptchaToken(token)
+  }
+
+  const handleCaptchaError = () => {
+    toast.error('验证失败，请重试')
+    setCaptchaToken('')
+    setCaptchaValue('')
   }
 
   return (
-    <>
-      <Dialog open={open} onOpenChange={handleClose}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-2xl">创建新笔记</DialogTitle>
-            <DialogDescription>
-              填写笔记信息，可选择设置密码保护和过期时间
-              {!user && !authLoading && (
-                <span className="block mt-2 text-amber-600 dark:text-amber-400">
-                  提示：需要登录才能创建笔记
-                </span>
-              )}
-            </DialogDescription>
-          </DialogHeader>
+    <Dialog open={isOpen} onOpenChange={handleClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>创建新笔记</DialogTitle>
+          {!user && (
+            <span className="text-sm text-muted-foreground">
+              登录后可以管理和编辑您的笔记
+            </span>
+          )}
+        </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="space-y-2">
-              <label htmlFor="title" className="text-sm font-medium">
-                标题 <span className="text-destructive">*</span>
-              </label>
-              <Input
-                id="title"
-                placeholder="输入笔记标题..."
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                className={errors.title ? 'border-destructive' : ''}
-              />
-              {errors.title && (
-                <p className="text-sm text-destructive">{errors.title}</p>
-              )}
-            </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-2">
+              标题 <span className="text-red-500">*</span>
+            </label>
+            <Input
+              value={formData.title}
+              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+              placeholder="输入笔记标题"
+              required
+            />
+          </div>
 
-            <div className="space-y-2">
-              <label htmlFor="content" className="text-sm font-medium">
-                内容
-              </label>
-              <MarkdownEditor
-                value={formData.content}
-                onChange={(value) => setFormData({ ...formData, content: value || '' })}
-                placeholder="开始写作..."
-                className={errors.content ? 'border-destructive' : ''}
-                height={300}
-              />
-              {errors.content && (
-                <p className="text-sm text-destructive">{errors.content}</p>
-              )}
-              <p className="text-xs text-muted-foreground">
-                {formData.content.length} / 51200 字符
-              </p>
-            </div>
+          {/* 图形验证码 */}
+          <div className="space-y-2">
+            <CaptchaWidget
+              ref={captchaRef}
+              onVerify={handleCaptchaVerify}
+              onError={handleCaptchaError}
+              value={captchaValue}
+              onChange={setCaptchaValue}
+            />
+          </div>
 
-            <div className="space-y-4">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setShowAdvanced(!showAdvanced)}
-                className="w-full"
-              >
-                {showAdvanced ? '隐藏' : '显示'}高级选项
-              </Button>
+          {/* 高级选项 */}
+          <div className="pt-4 border-t">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="text-sm"
+            >
+              {showAdvanced ? '隐藏' : '显示'}高级选项
+            </Button>
 
-              {showAdvanced && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="space-y-4"
-                >
-                  <Card>
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-lg flex items-center gap-2">
-                        <Lock className="h-4 w-4" />
-                        密码保护
-                      </CardTitle>
-                      <CardDescription>
-                        设置密码后，只有知道密码的人才能查看笔记
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <Input
-                        type="password"
-                        placeholder="设置访问密码（可选）"
-                        value={formData.password}
-                        onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                        className={errors.password ? 'border-destructive' : ''}
-                      />
-                      {errors.password && (
-                        <p className="text-sm text-destructive mt-1">{errors.password}</p>
-                      )}
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              )}
-            </div>
+            {showAdvanced && (
+              <div className="mt-4 space-y-4">
+                <Card className="p-4">
+                  <h4 className="font-medium mb-3">🔒 密码保护</h4>
+                  <PasswordInput
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    placeholder="设置访问密码（可选）"
+                  />
+                  <p className="text-xs text-muted-foreground mt-2">
+                    设置后，访问此笔记需要输入密码
+                  </p>
+                </Card>
 
-            <div className="flex gap-3 pt-4">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleClose}
-                className="flex-1"
-                disabled={isLoading}
-              >
-                <X className="h-4 w-4 mr-2" />
-                取消
-              </Button>
-              <Button
-                type="submit"
-                className="flex-1"
-                disabled={isLoading || authLoading}
-              >
-                {isLoading ? (
-                  <Loading size="sm" text="创建中..." />
-                ) : (
-                  <>
-                    <Save className="h-4 w-4 mr-2" />
-                    {!user && !authLoading ? '登录并创建' : '创建笔记'}
-                  </>
-                )}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+                <Card className="p-4">
+                  <h4 className="font-medium mb-3">🔗 自定义短链接</h4>
+                  <div className="space-y-2">
+                    <Input
+                      value={formData.customShortUrl}
+                      onChange={(e) => setFormData({ ...formData, customShortUrl: e.target.value })}
+                      placeholder="自定义短链后缀（可选）"
+                    />
+                    {formData.customShortUrl && (
+                      <p className="text-xs text-blue-600 dark:text-blue-400">
+                        预览链接: /s/{formData.customShortUrl}
+                      </p>
+                    )}
+                    <div className="text-xs text-muted-foreground space-y-1">
+                      <p>• 只能包含字母、数字、下划线和连字符</p>
+                      <p>• 长度3-50个字符</p>
+                      <p>• 如果不设置，系统将自动生成随机短链</p>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+            )}
+          </div>
 
-      <LoginModal
-        open={showLoginModal}
-        onOpenChange={setShowLoginModal}
-        onSuccess={handleLoginSuccess}
-      />
-    </>
+          <div className="flex justify-end space-x-3 pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleClose}
+              disabled={isLoading}
+            >
+              取消
+            </Button>
+                        <Button 
+              type="submit"
+              disabled={isLoading || !captchaValue.trim()}
+            >
+              {isLoading ? '创建中...' : '创建笔记'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 } 

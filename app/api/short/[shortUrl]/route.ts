@@ -35,6 +35,7 @@ export async function GET(
       content: note.isPasswordProtected ? '' : note.content, // 如果有密码保护，不返回内容
       shortUrl: note.shortUrl!,
       createdAt: note.createdAt,
+      updatedAt: note.updatedAt,  // 添加更新时间
       isPasswordProtected: note.isPasswordProtected || false
     }
 

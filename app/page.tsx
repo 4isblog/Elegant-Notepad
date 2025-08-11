@@ -19,6 +19,10 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Header } from "@/components/Header"
 import { CreateNoteModal } from "@/components/CreateNoteModal"
+import { LoginModal } from "@/components/LoginModal"
+import { useAuth } from "@/components/AuthProvider"
+import { useRouter } from "next/navigation"
+import toast from "react-hot-toast"
 
 const features = [
   {
@@ -61,6 +65,30 @@ const features = [
 
 export default function HomePage() {
   const [showCreateModal, setShowCreateModal] = React.useState(false)
+  const [showLoginModal, setShowLoginModal] = React.useState(false)
+  const { user } = useAuth()
+  const router = useRouter()
+
+  const handleStartWriting = () => {
+    if (!user) {
+      toast.error('请登录后继续创建你的笔记')
+      setShowLoginModal(true)
+      return
+    }
+    setShowCreateModal(true)
+  }
+
+  // 监听用户登录状态变化
+  React.useEffect(() => {
+    // 如果用户刚刚登录且登录模态框是打开的，关闭登录模态框并跳转到笔记页面
+    if (user && showLoginModal) {
+      setShowLoginModal(false)
+      // 稍微延迟一下再跳转，让用户看到登录成功的反馈
+      setTimeout(() => {
+        router.push('/notes')
+      }, 500)
+    }
+  }, [user, showLoginModal, router])
 
   return (
     <div className="min-h-screen">
@@ -83,7 +111,7 @@ export default function HomePage() {
               优雅记事本
             </h1>
             <p className="text-xl md:text-2xl text-muted-foreground max-w-3xl mx-auto">
-              现代化、安全、美观的记事本应用，支持密码保护、分享功能和优雅设计
+              现代化、安全、美观的记事本应用，支持密码保护、分享功能
             </p>
           </motion.div>
 
@@ -95,7 +123,7 @@ export default function HomePage() {
           >
             <Button
               size="lg"
-              onClick={() => setShowCreateModal(true)}
+              onClick={handleStartWriting}
               className="text-lg px-8 py-6 h-auto"
             >
               <Plus className="h-5 w-5 mr-2" />
@@ -154,15 +182,40 @@ export default function HomePage() {
       {/* Footer */}
       <footer className="border-t bg-background/50 backdrop-blur">
         <div className="container mx-auto px-4 py-8">
-          <div className="text-center text-sm text-muted-foreground">
+          <div className="text-center text-sm text-muted-foreground space-y-2">
             <p>© 2025 优雅记事本. Made with ❤️ for secure and elegant note-taking.</p>
+            <div className="flex justify-center gap-6">
+              <Link href="/privacy" className="hover:text-primary transition-colors">
+                隐私策略
+              </Link>
+              <Link href="/terms" className="hover:text-primary transition-colors">
+                服务条款
+              </Link>
+              <Link href="/about" className="hover:text-primary transition-colors">
+                关于我们
+              </Link>
+            </div>
           </div>
         </div>
       </footer>
 
+      {/* 登录模态框 */}
+      <LoginModal 
+        isOpen={showLoginModal} 
+        onClose={() => setShowLoginModal(false)}
+      />
+
+      {/* 创建笔记模态框 */}
       <CreateNoteModal 
-        open={showCreateModal} 
-        onOpenChange={setShowCreateModal} 
+        isOpen={showCreateModal} 
+        onClose={() => setShowCreateModal(false)}
+        onSuccess={(noteId) => {
+          setShowCreateModal(false)
+          // 跳转到笔记编辑页面
+          if (noteId) {
+            router.push(`/note/${noteId}`)
+          }
+        }}
       />
     </div>
   )

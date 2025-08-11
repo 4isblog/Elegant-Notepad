@@ -3,11 +3,12 @@
 import * as React from "react"
 import Link from "next/link"
 import { useTheme } from "next-themes"
-import { Moon, Sun, FileText, Home, List, User, LogOut, LogIn } from "lucide-react"
+import { Moon, Sun, FileText, Home, List, User, LogOut, LogIn, Users, ChevronDown, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { LoginModal } from "@/components/LoginModal"
 import { useAuth } from "@/components/AuthProvider"
 import { cn } from "@/lib/utils"
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 
 export function Header() {
   const { theme, setTheme } = useTheme()
@@ -35,44 +36,64 @@ export function Header() {
           </div>
 
           <nav className="hidden md:flex items-center space-x-6">
+            <Link
+              href="/"
+              className="text-sm font-medium transition-colors hover:text-primary"
+            >
+              <Home className="h-4 w-4 inline mr-1" />
+              首页
+            </Link>
             {user && (
-              <>
-                <Link
-                  href="/"
-                  className="text-sm font-medium transition-colors hover:text-primary"
-                >
-                  <Home className="h-4 w-4 inline mr-1" />
-                  首页
-                </Link>
-                <Link
-                  href="/notes"
-                  className="text-sm font-medium transition-colors hover:text-primary"
-                >
-                  <List className="h-4 w-4 inline mr-1" />
-                  我的笔记
-                </Link>
-              </>
+              <Link
+                href="/notes"
+                className="text-sm font-medium transition-colors hover:text-primary"
+              >
+                <List className="h-4 w-4 inline mr-1" />
+                我的笔记
+              </Link>
             )}
+            <Link
+              href="/about"
+              className="text-sm font-medium transition-colors hover:text-primary"
+            >
+              <Users className="h-4 w-4 inline mr-1" />
+              关于我们
+            </Link>
           </nav>
 
           <div className="flex items-center space-x-2">
             {!isLoading && (
               <>
                 {user ? (
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm font-medium text-muted-foreground hidden sm:inline">
-                      欢迎, {user.username}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={logout}
-                      className="h-9"
-                    >
-                      <LogOut className="h-4 w-4 mr-1" />
-                      <span className="hidden sm:inline">退出</span>
-                    </Button>
-                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger>
+                      <div className="flex items-center space-x-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
+                        <User className="h-4 w-4" />
+                        <span className="hidden sm:inline">{user.email}</span>
+                        <ChevronDown className="h-3 w-3" />
+                      </div>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-56">
+                      <div className="px-2 py-1.5 text-sm font-medium">
+                        {user.username}
+                      </div>
+                      <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                        {user.email}
+                      </div>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem>
+                        <Link href="/deactivate" className="flex items-center text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          注销账号
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={logout}>
+                        <LogOut className="h-4 w-4 mr-2" />
+                        退出登录
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 ) : (
                   <Button
                     variant="ghost"
@@ -102,8 +123,8 @@ export function Header() {
       </header>
 
       <LoginModal
-        open={showLoginModal}
-        onOpenChange={setShowLoginModal}
+        isOpen={showLoginModal}
+        onClose={() => setShowLoginModal(false)}
       />
     </>
   )
